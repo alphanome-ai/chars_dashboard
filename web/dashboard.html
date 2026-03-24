@@ -1,0 +1,1195 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>CHARS Allocator Dashboard</title>
+
+    <!-- D3.js for graph rendering -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/d3/7.8.5/d3.min.js"></script>
+    <!-- Dagre for DAG layout -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/dagre/0.8.5/dagre.min.js"></script>
+    <!-- roslibjs for ROS communication -->
+    <script src="https://cdn.jsdelivr.net/npm/roslib@1.4.1/build/roslib.min.js"></script>
+
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
+
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Inter', sans-serif;
+            background: #0a0e1a;
+            color: #e0e6f0;
+            overflow: hidden;
+            height: 100vh;
+        }
+
+        /* ── Header ── */
+        .header {
+            background: linear-gradient(135deg, #0f1629 0%, #1a1f3a 100%);
+            border-bottom: 1px solid rgba(99, 140, 255, 0.15);
+            padding: 12px 24px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            height: 56px;
+        }
+
+        .header-right {
+            display: flex;
+            align-items: center;
+            gap: 16px;
+        }
+
+        .header h1 {
+            font-size: 18px;
+            font-weight: 600;
+            background: linear-gradient(135deg, #638cff, #a78bfa);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            letter-spacing: -0.3px;
+        }
+
+        .connection-status {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            font-size: 12px;
+            font-weight: 500;
+            color: #8892a8;
+        }
+
+        .connection-dot {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            background: #ef4444;
+            transition: background 0.3s;
+        }
+
+        .connection-dot.connected {
+            background: #22c55e;
+            box-shadow: 0 0 8px rgba(34, 197, 94, 0.5);
+        }
+
+        /* ── Main Layout ── */
+        .main-container {
+            display: grid;
+            grid-template-columns: 1fr 320px;
+            grid-template-rows: 1fr 200px;
+            height: calc(100vh - 56px);
+            gap: 0;
+        }
+
+        /* ── DAG Panel ── */
+        .dag-panel {
+            grid-row: 1 / 3;
+            background: #0d1220;
+            border-right: 1px solid rgba(99, 140, 255, 0.1);
+            position: relative;
+            overflow: hidden;
+        }
+
+        .dag-panel .panel-title {
+            position: absolute;
+            top: 12px;
+            left: 16px;
+            font-size: 11px;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            color: #5a6480;
+            z-index: 10;
+        }
+
+        .dag-panel svg {
+            width: 100%;
+            height: 100%;
+        }
+
+        /* DAG node styles */
+        .dag-node rect {
+            rx: 8;
+            ry: 8;
+            stroke-width: 2;
+            cursor: pointer;
+            transition: filter 0.2s;
+        }
+
+        .dag-node:hover rect {
+            filter: brightness(1.2);
+        }
+
+        .dag-node text {
+            font-family: 'Inter', sans-serif;
+            font-size: 11px;
+            font-weight: 500;
+            fill: #fff;
+            text-anchor: middle;
+            pointer-events: none;
+        }
+
+        .dag-node .node-agent {
+            font-size: 9px;
+            font-weight: 400;
+            fill: rgba(255,255,255,0.7);
+        }
+
+        .dag-node .node-type-badge {
+            font-size: 8px;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+
+        .dag-edge {
+            fill: none;
+            stroke: #2a3550;
+            stroke-width: 2;
+            marker-end: url(#arrowhead);
+        }
+
+        .dag-edge.active {
+            stroke: #638cff;
+            stroke-width: 2.5;
+        }
+
+        /* ── Agent Panel ── */
+        .agent-panel {
+            background: #0f1629;
+            border-bottom: 1px solid rgba(99, 140, 255, 0.1);
+            padding: 16px;
+            overflow-y: auto;
+        }
+
+        .agent-panel .panel-title {
+            font-size: 11px;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            color: #5a6480;
+            margin-bottom: 12px;
+        }
+
+        .agent-card {
+            background: rgba(255,255,255, 0.03);
+            border: 1px solid rgba(99, 140, 255, 0.08);
+            border-radius: 10px;
+            padding: 12px 14px;
+            margin-bottom: 8px;
+            transition: border-color 0.3s, background 0.3s;
+        }
+
+        .agent-card.busy {
+            border-color: rgba(99, 140, 255, 0.25);
+            background: rgba(99, 140, 255, 0.05);
+        }
+
+        .agent-card-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            margin-bottom: 6px;
+        }
+
+        .agent-name {
+            font-size: 13px;
+            font-weight: 600;
+            color: #c8d0e0;
+        }
+
+        .agent-status-badge {
+            font-size: 10px;
+            font-weight: 600;
+            padding: 2px 8px;
+            border-radius: 10px;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+
+        .agent-status-badge.idle {
+            background: rgba(34, 197, 94, 0.15);
+            color: #4ade80;
+        }
+
+        .agent-status-badge.busy {
+            background: rgba(99, 140, 255, 0.15);
+            color: #93b4ff;
+        }
+
+        .agent-task {
+            font-size: 11px;
+            color: #6b7790;
+        }
+
+        .agent-task span {
+            color: #a0aec0;
+            font-weight: 500;
+        }
+
+        /* ── Event Log ── */
+        .event-panel {
+            background: #0a0e1a;
+            padding: 12px 16px;
+            overflow-y: auto;
+        }
+
+        .event-panel .panel-title {
+            font-size: 11px;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            color: #5a6480;
+            margin-bottom: 8px;
+        }
+
+        .event-log {
+            font-family: 'JetBrains Mono', 'Fira Code', monospace;
+            font-size: 11px;
+            line-height: 1.6;
+        }
+
+        .event-entry {
+            padding: 2px 0;
+            color: #6b7790;
+            animation: fadeIn 0.3s ease;
+        }
+
+        .event-entry .timestamp {
+            color: #3d4660;
+            margin-right: 8px;
+        }
+
+        .event-entry.dispatch { color: #93b4ff; }
+        .event-entry.complete { color: #4ade80; }
+        .event-entry.failure  { color: #f87171; }
+
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateY(-4px); }
+            to   { opacity: 1; transform: translateY(0); }
+        }
+
+        /* ── DAG Status Legend ── */
+        .dag-legend {
+            position: absolute;
+            bottom: 16px;
+            left: 16px;
+            display: flex;
+            gap: 16px;
+            z-index: 10;
+        }
+
+        .legend-item {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            font-size: 10px;
+            font-weight: 500;
+            color: #5a6480;
+        }
+
+        .legend-dot {
+            width: 10px;
+            height: 10px;
+            border-radius: 3px;
+        }
+
+        /* ── Empty State ── */
+        .empty-state {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            height: 100%;
+            color: #3d4660;
+            font-size: 14px;
+            font-weight: 400;
+        }
+
+        /* ── Scrollbar ── */
+        ::-webkit-scrollbar { width: 4px; }
+        ::-webkit-scrollbar-track { background: transparent; }
+        ::-webkit-scrollbar-thumb { background: #1e2740; border-radius: 4px; }
+
+        /* ── DAG Summary bar ── */
+        .dag-summary {
+            position: absolute;
+            top: 12px;
+            right: 16px;
+            display: flex;
+            gap: 12px;
+            z-index: 10;
+        }
+
+        .summary-chip {
+            font-size: 11px;
+            font-weight: 600;
+            padding: 4px 10px;
+            border-radius: 6px;
+            background: rgba(255,255,255,0.04);
+            border: 1px solid rgba(255,255,255,0.06);
+        }
+
+        /* ── DAG Input Panel ── */
+        .dag-input-btn {
+            background: linear-gradient(135deg, #638cff, #a78bfa);
+            color: #fff;
+            border: none;
+            padding: 6px 14px;
+            border-radius: 8px;
+            font-size: 12px;
+            font-weight: 600;
+            font-family: 'Inter', sans-serif;
+            cursor: pointer;
+            transition: opacity 0.2s, transform 0.1s;
+            letter-spacing: 0.3px;
+        }
+
+        .dag-input-btn:hover { opacity: 0.9; }
+        .dag-input-btn:active { transform: scale(0.97); }
+
+        .text-input-btn {
+            background: linear-gradient(135deg, #14b8a6, #0ea5e9);
+            color: #fff;
+            border: none;
+            padding: 6px 14px;
+            border-radius: 8px;
+            font-size: 12px;
+            font-weight: 600;
+            font-family: 'Inter', sans-serif;
+            cursor: pointer;
+            transition: opacity 0.2s, transform 0.1s;
+            letter-spacing: 0.3px;
+        }
+
+        .text-input-btn:hover { opacity: 0.9; }
+        .text-input-btn:active { transform: scale(0.97); }
+
+        .dag-input-overlay {
+            position: fixed;
+            inset: 0;
+            background: rgba(0,0,0,0.5);
+            backdrop-filter: blur(4px);
+            z-index: 100;
+            display: none;
+            opacity: 0;
+            transition: opacity 0.3s;
+        }
+
+        .dag-input-overlay.open {
+            display: block;
+            opacity: 1;
+        }
+
+        .dag-input-panel {
+            position: fixed;
+            top: 0;
+            right: -520px;
+            width: 520px;
+            height: 100vh;
+            background: #0f1629;
+            border-left: 1px solid rgba(99, 140, 255, 0.15);
+            z-index: 101;
+            display: flex;
+            flex-direction: column;
+            transition: right 0.35s cubic-bezier(0.4, 0, 0.2, 1);
+            box-shadow: -8px 0 32px rgba(0,0,0,0.4);
+        }
+
+        .dag-input-panel.open {
+            right: 0;
+        }
+
+        .dag-input-header {
+            padding: 16px 20px;
+            border-bottom: 1px solid rgba(99, 140, 255, 0.1);
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+        }
+
+        .dag-input-header h2 {
+            font-size: 14px;
+            font-weight: 600;
+            color: #c8d0e0;
+        }
+
+        .dag-input-close {
+            background: none;
+            border: none;
+            color: #5a6480;
+            font-size: 20px;
+            cursor: pointer;
+            padding: 4px;
+            line-height: 1;
+        }
+
+        .dag-input-close:hover { color: #c8d0e0; }
+
+        .dag-input-templates {
+            padding: 12px 20px;
+            display: flex;
+            gap: 8px;
+            flex-wrap: wrap;
+            border-bottom: 1px solid rgba(99, 140, 255, 0.06);
+        }
+
+        .template-btn {
+            background: rgba(255,255,255,0.04);
+            border: 1px solid rgba(99, 140, 255, 0.12);
+            color: #8892a8;
+            padding: 5px 12px;
+            border-radius: 6px;
+            font-size: 11px;
+            font-weight: 500;
+            font-family: 'Inter', sans-serif;
+            cursor: pointer;
+            transition: border-color 0.2s, color 0.2s;
+        }
+
+        .template-btn:hover {
+            border-color: rgba(99, 140, 255, 0.3);
+            color: #c8d0e0;
+        }
+
+        .dag-input-editor {
+            flex: 1;
+            padding: 12px 20px;
+            display: flex;
+            flex-direction: column;
+            min-height: 0;
+        }
+
+        .dag-input-editor textarea {
+            flex: 1;
+            width: 100%;
+            background: #0a0e1a;
+            border: 1px solid rgba(99, 140, 255, 0.1);
+            border-radius: 8px;
+            color: #c8d0e0;
+            font-family: 'JetBrains Mono', 'Fira Code', 'Consolas', monospace;
+            font-size: 12px;
+            line-height: 1.5;
+            padding: 14px;
+            resize: none;
+            outline: none;
+            transition: border-color 0.2s;
+        }
+
+        .dag-input-editor textarea:focus {
+            border-color: rgba(99, 140, 255, 0.3);
+        }
+
+        .dag-input-editor textarea.error {
+            border-color: rgba(239, 68, 68, 0.5);
+        }
+
+        .dag-input-error {
+            color: #f87171;
+            font-size: 11px;
+            margin-top: 6px;
+            min-height: 16px;
+        }
+
+        .dag-input-actions {
+            padding: 16px 20px;
+            border-top: 1px solid rgba(99, 140, 255, 0.1);
+            display: flex;
+            gap: 10px;
+        }
+
+        .dag-input-actions button {
+            font-family: 'Inter', sans-serif;
+            font-size: 12px;
+            font-weight: 600;
+            padding: 8px 20px;
+            border-radius: 8px;
+            cursor: pointer;
+            transition: opacity 0.2s, transform 0.1s;
+            border: none;
+        }
+
+        .btn-submit {
+            background: linear-gradient(135deg, #22c55e, #16a34a);
+            color: #fff;
+            flex: 1;
+        }
+
+        .btn-preview {
+            background: rgba(99, 140, 255, 0.15);
+            color: #93b4ff;
+            border: 1px solid rgba(99, 140, 255, 0.2) !important;
+        }
+
+        .btn-clear {
+            background: rgba(255,255,255,0.05);
+            color: #6b7790;
+        }
+
+        .dag-input-actions button:hover { opacity: 0.85; }
+        .dag-input-actions button:active { transform: scale(0.97); }
+        .dag-input-actions button:disabled { opacity: 0.4; cursor: not-allowed; }
+    </style>
+</head>
+<body>
+
+<div class="header">
+    <h1>CHARS Allocator Dashboard</h1>
+    <div class="header-right">
+        <button class="dag-input-btn" onclick="toggleDagInput()">+ Submit DAG</button>
+        <button class="text-input-btn" onclick="toggleTextInputPanel()">+ Submit Text Input</button>
+        <div class="connection-status">
+            <div class="connection-dot" id="connDot"></div>
+            <span id="connLabel">Disconnected</span>
+        </div>
+    </div>
+</div>
+
+<div class="main-container">
+    <!-- DAG Graph -->
+    <div class="dag-panel">
+        <div class="panel-title">Task DAG</div>
+        <div class="dag-summary" id="dagSummary"></div>
+        <svg id="dagSvg"></svg>
+        <div class="dag-legend">
+            <div class="legend-item"><div class="legend-dot" style="background:#3d4660"></div>Pending</div>
+            <div class="legend-item"><div class="legend-dot" style="background:#f59e0b"></div>Assigned</div>
+            <div class="legend-item"><div class="legend-dot" style="background:#638cff"></div>In Progress</div>
+            <div class="legend-item"><div class="legend-dot" style="background:#22c55e"></div>Completed</div>
+            <div class="legend-item"><div class="legend-dot" style="background:#ef4444"></div>Failed</div>
+        </div>
+        <div class="empty-state" id="dagEmpty">Waiting for DAG…</div>
+    </div>
+
+    <!-- Agent Panel -->
+    <div class="agent-panel">
+        <div class="panel-title">Agents</div>
+        <div id="agentCards">
+            <div class="empty-state" style="height:auto;padding:24px 0;font-size:12px">No agent data</div>
+        </div>
+    </div>
+
+    <!-- Event Log -->
+    <div class="event-panel">
+        <div class="panel-title">Event Log</div>
+        <div class="event-log" id="eventLog"></div>
+    </div>
+</div>
+
+<!-- DAG Input Overlay -->
+<div class="dag-input-overlay" id="dagOverlay" onclick="toggleDagInput()"></div>
+
+<!-- DAG Input Slide Panel -->
+<div class="dag-input-panel" id="dagInputPanel">
+    <div class="dag-input-header">
+        <h2>Submit Task DAG</h2>
+        <button class="dag-input-close" onclick="toggleDagInput()">✕</button>
+    </div>
+
+    <div class="dag-input-templates">
+        <button class="template-btn" onclick="loadTemplate('parallel2')">⚡ 2-Chain Parallel</button>
+        <button class="template-btn" onclick="loadTemplate('sequential')">→ Sequential Pick-Place</button>
+        <button class="template-btn" onclick="loadTemplate('empty')">📄 Empty</button>
+    </div>
+
+    <div class="dag-input-editor">
+        <textarea id="dagEditor" spellcheck="false" placeholder='Paste your DAG JSON here, or use a template above…'></textarea>
+        <div class="dag-input-error" id="dagError"></div>
+    </div>
+
+    <div class="dag-input-actions">
+        <button class="btn-clear" onclick="clearDagEditor()">Clear</button>
+        <button class="btn-preview" onclick="previewDag()">Preview</button>
+        <button class="btn-submit" id="btnSubmit" onclick="submitDag()">Submit DAG →</button>
+    </div>
+</div>
+
+<!-- Text Input Overlay -->
+<div class="dag-input-overlay" id="textOverlay" onclick="toggleTextInputPanel()"></div>
+
+<!-- Text Input Slide Panel -->
+<div class="dag-input-panel" id="textInputPanel">
+    <div class="dag-input-header">
+        <h2>Submit Text Input</h2>
+        <button class="dag-input-close" onclick="toggleTextInputPanel()">✕</button>
+    </div>
+
+    <div class="dag-input-editor">
+        <textarea id="taskTextEditor" spellcheck="true" placeholder="Describe the task request for DAG generation..."></textarea>
+        <div class="dag-input-error" id="textInputError"></div>
+    </div>
+
+    <div class="dag-input-actions">
+        <button class="btn-clear" onclick="clearTextInputEditor()">Clear</button>
+        <button class="btn-submit" id="btnSubmitText" onclick="submitTextInput()">Submit Text →</button>
+    </div>
+</div>
+
+<script>
+// ══════════════════════════════════════════════════════════════
+//  Configuration
+// ══════════════════════════════════════════════════════════════
+const ROSBRIDGE_URL = `ws://${window.location.hostname}:9090`;
+const MAX_LOG_ENTRIES = 100;
+
+// Status → color mapping
+const STATUS_COLORS = {
+    'PENDING':     { fill: '#1e2740', stroke: '#3d4660' },
+    'ASSIGNED':    { fill: '#2d2410', stroke: '#f59e0b' },
+    'IN_PROGRESS': { fill: '#0f1a3d', stroke: '#638cff' },
+    'COMPLETED':   { fill: '#0a2616', stroke: '#22c55e' },
+    'FAILED':      { fill: '#2a0f0f', stroke: '#ef4444' },
+};
+
+// Task type → badge color
+const TYPE_COLORS = {
+    'navigate': '#60a5fa',
+    'pick':     '#f59e0b',
+    'place':    '#a78bfa',
+};
+
+// ══════════════════════════════════════════════════════════════
+//  State
+// ══════════════════════════════════════════════════════════════
+let dagData = null;
+let ros = null;
+let reconnectTimer = null;
+let generateTaskDagService = null;
+
+// ══════════════════════════════════════════════════════════════
+//  ROS Connection
+// ══════════════════════════════════════════════════════════════
+function connectROS() {
+    ros = new ROSLIB.Ros({ url: ROSBRIDGE_URL });
+
+    ros.on('connection', () => {
+        document.getElementById('connDot').classList.add('connected');
+        document.getElementById('connLabel').textContent = 'Connected';
+        addLogEntry('Connected to rosbridge', 'complete');
+        if (reconnectTimer) { clearInterval(reconnectTimer); reconnectTimer = null; }
+        subscribeTopics();
+    });
+
+    ros.on('close', () => {
+        document.getElementById('connDot').classList.remove('connected');
+        document.getElementById('connLabel').textContent = 'Disconnected';
+        addLogEntry('Disconnected from rosbridge', 'failure');
+        if (!reconnectTimer) {
+            reconnectTimer = setInterval(() => connectROS(), 3000);
+        }
+    });
+
+    ros.on('error', () => {});
+}
+
+function subscribeTopics() {
+    // DAG status
+    const dagStatusTopic = new ROSLIB.Topic({
+        ros: ros,
+        name: '/chars/dag_status',
+        messageType: 'std_msgs/String',
+    });
+    dagStatusTopic.subscribe((msg) => {
+        try {
+            dagData = JSON.parse(msg.data);
+            renderDAG();
+            updateAgentPanel();
+            updateSummary();
+        } catch(e) {
+            console.error('Failed to parse DAG status:', e);
+        }
+    });
+
+    // Allocator status (event log)
+    const statusTopic = new ROSLIB.Topic({
+        ros: ros,
+        name: '/chars/allocator_status',
+        messageType: 'std_msgs/String',
+    });
+    statusTopic.subscribe((msg) => {
+        let cls = '';
+        if (msg.data.includes('Dispatching')) cls = 'dispatch';
+        else if (msg.data.includes('COMPLETED')) cls = 'complete';
+        else if (msg.data.includes('FAILURE')) cls = 'failure';
+        addLogEntry(msg.data, cls);
+    });
+}
+
+// ══════════════════════════════════════════════════════════════
+//  DAG Rendering
+// ══════════════════════════════════════════════════════════════
+function renderDAG() {
+    if (!dagData || !dagData.tasks || dagData.tasks.length === 0) return;
+
+    document.getElementById('dagEmpty').style.display = 'none';
+    const svgEl = document.getElementById('dagSvg');
+    const width = svgEl.clientWidth;
+    const height = svgEl.clientHeight;
+
+    // Build dagre graph
+    const g = new dagre.graphlib.Graph();
+    g.setGraph({
+        rankdir: 'LR',
+        nodesep: 30,
+        ranksep: 60,
+        marginx: 40,
+        marginy: 40,
+    });
+    g.setDefaultEdgeLabel(() => ({}));
+
+    const NODE_W = 140;
+    const NODE_H = 58;
+
+    dagData.tasks.forEach(task => {
+        g.setNode(task.task_id, { width: NODE_W, height: NODE_H, task: task });
+    });
+
+    dagData.tasks.forEach(task => {
+        (task.dependencies || []).forEach(dep => {
+            g.setEdge(dep, task.task_id);
+        });
+    });
+
+    dagre.layout(g);
+
+    // Get graph bounds for centering
+    const gLabel = g.graph();
+    const gWidth = gLabel.width || 400;
+    const gHeight = gLabel.height || 200;
+
+    const offsetX = (width - gWidth) / 2;
+    const offsetY = (height - gHeight) / 2;
+
+    // Clear and rebuild SVG
+    const svg = d3.select('#dagSvg');
+    svg.selectAll('*').remove();
+
+    // Arrow marker
+    svg.append('defs').append('marker')
+        .attr('id', 'arrowhead')
+        .attr('viewBox', '0 0 10 10')
+        .attr('refX', 10).attr('refY', 5)
+        .attr('markerWidth', 8).attr('markerHeight', 8)
+        .attr('orient', 'auto')
+        .append('path')
+        .attr('d', 'M0,0 L10,5 L0,10 Z')
+        .attr('fill', '#2a3550');
+
+    // Glow filter
+    const filter = svg.select('defs').append('filter')
+        .attr('id', 'glow');
+    filter.append('feGaussianBlur')
+        .attr('stdDeviation', '3')
+        .attr('result', 'blur');
+    filter.append('feMerge')
+        .selectAll('feMergeNode')
+        .data(['blur', 'SourceGraphic'])
+        .enter().append('feMergeNode')
+        .attr('in', d => d);
+
+    const container = svg.append('g')
+        .attr('transform', `translate(${offsetX}, ${offsetY})`);
+
+    // Render edges
+    g.edges().forEach(e => {
+        const edge = g.edge(e);
+        const sourceTask = g.node(e.v).task;
+        const targetTask = g.node(e.w).task;
+        const isActive = sourceTask.status === 'COMPLETED' &&
+                         (targetTask.status === 'IN_PROGRESS' || targetTask.status === 'ASSIGNED');
+
+        const points = edge.points;
+        const line = d3.line().x(d => d.x).y(d => d.y).curve(d3.curveBasis);
+
+        container.append('path')
+            .attr('class', `dag-edge ${isActive ? 'active' : ''}`)
+            .attr('d', line(points));
+    });
+
+    // Render nodes
+    g.nodes().forEach(nodeId => {
+        const node = g.node(nodeId);
+        const task = node.task;
+        const colors = STATUS_COLORS[task.status] || STATUS_COLORS['PENDING'];
+        const typeColor = TYPE_COLORS[task.task_type] || '#888';
+
+        const nodeG = container.append('g')
+            .attr('class', 'dag-node')
+            .attr('transform', `translate(${node.x - NODE_W/2}, ${node.y - NODE_H/2})`);
+
+        // Background rect
+        nodeG.append('rect')
+            .attr('width', NODE_W)
+            .attr('height', NODE_H)
+            .attr('fill', colors.fill)
+            .attr('stroke', colors.stroke);
+
+        // Glow for active nodes
+        if (task.status === 'IN_PROGRESS') {
+            nodeG.select('rect').attr('filter', 'url(#glow)');
+        }
+
+        // Task type badge
+        nodeG.append('text')
+            .attr('class', 'node-type-badge')
+            .attr('x', NODE_W / 2)
+            .attr('y', 14)
+            .attr('fill', typeColor)
+            .text(task.task_type);
+
+        // Task ID
+        nodeG.append('text')
+            .attr('x', NODE_W / 2)
+            .attr('y', 30)
+            .text(task.task_id.length > 18 ? task.task_id.slice(0, 18) + '…' : task.task_id);
+
+        // Agent assignment
+        if (task.assigned_agent) {
+            nodeG.append('text')
+                .attr('class', 'node-agent')
+                .attr('x', NODE_W / 2)
+                .attr('y', 46)
+                .text('⤷ ' + task.assigned_agent);
+        } else {
+            nodeG.append('text')
+                .attr('class', 'node-agent')
+                .attr('x', NODE_W / 2)
+                .attr('y', 46)
+                .attr('fill', 'rgba(255,255,255,0.3)')
+                .text('unassigned');
+        }
+    });
+}
+
+// ══════════════════════════════════════════════════════════════
+//  Agent Panel
+// ══════════════════════════════════════════════════════════════
+function updateAgentPanel() {
+    if (!dagData || !dagData.tasks) return;
+
+    // Extract unique agents from assigned tasks
+    const agentMap = {};
+    dagData.tasks.forEach(task => {
+        if (task.assigned_agent) {
+            const prev = agentMap[task.assigned_agent];
+            // Prefer IN_PROGRESS over COMPLETED for display
+            if (!prev || task.status === 'IN_PROGRESS' || task.status === 'ASSIGNED') {
+                agentMap[task.assigned_agent] = task;
+            }
+        }
+    });
+
+    // Also show agents from known namespaces that haven't been assigned yet
+    // We infer agents from the DAG status — they'll appear once assigned
+
+    const container = document.getElementById('agentCards');
+
+    if (Object.keys(agentMap).length === 0) {
+        container.innerHTML = '<div class="empty-state" style="height:auto;padding:24px 0;font-size:12px">No agents assigned yet</div>';
+        return;
+    }
+
+    let html = '';
+    for (const [agentName, task] of Object.entries(agentMap)) {
+        const isBusy = task.status === 'IN_PROGRESS' || task.status === 'ASSIGNED';
+        const statusLabel = isBusy ? 'BUSY' : 'IDLE';
+        const statusClass = isBusy ? 'busy' : 'idle';
+        const taskLabel = isBusy ? task.task_id : 'Last: ' + task.task_id;
+
+        html += `
+            <div class="agent-card ${statusClass}">
+                <div class="agent-card-header">
+                    <div class="agent-name">${agentName}</div>
+                    <div class="agent-status-badge ${statusClass}">${statusLabel}</div>
+                </div>
+                <div class="agent-task">Task: <span>${taskLabel}</span></div>
+                <div class="agent-task">Type: <span>${task.task_type}</span></div>
+            </div>
+        `;
+    }
+    container.innerHTML = html;
+}
+
+// ══════════════════════════════════════════════════════════════
+//  Summary Bar
+// ══════════════════════════════════════════════════════════════
+function updateSummary() {
+    if (!dagData || !dagData.tasks) return;
+
+    const counts = { PENDING: 0, ASSIGNED: 0, IN_PROGRESS: 0, COMPLETED: 0, FAILED: 0 };
+    dagData.tasks.forEach(t => { counts[t.status] = (counts[t.status] || 0) + 1; });
+
+    const total = dagData.tasks.length;
+    const done = counts.COMPLETED;
+
+    let html = `<div class="summary-chip" style="color:#c8d0e0">${done}/${total} done</div>`;
+    if (counts.IN_PROGRESS > 0) html += `<div class="summary-chip" style="color:#638cff">${counts.IN_PROGRESS} active</div>`;
+    if (counts.FAILED > 0)      html += `<div class="summary-chip" style="color:#ef4444">${counts.FAILED} failed</div>`;
+
+    document.getElementById('dagSummary').innerHTML = html;
+}
+
+// ══════════════════════════════════════════════════════════════
+//  Event Log
+// ══════════════════════════════════════════════════════════════
+function addLogEntry(message, cls = '') {
+    const log = document.getElementById('eventLog');
+    const now = new Date().toLocaleTimeString('en-US', { hour12: false });
+
+    const entry = document.createElement('div');
+    entry.className = `event-entry ${cls}`;
+    entry.innerHTML = `<span class="timestamp">${now}</span>${message}`;
+
+    log.prepend(entry);
+
+    // Trim old entries
+    while (log.children.length > MAX_LOG_ENTRIES) {
+        log.removeChild(log.lastChild);
+    }
+}
+
+// ══════════════════════════════════════════════════════════════
+//  Window resize
+// ══════════════════════════════════════════════════════════════
+window.addEventListener('resize', () => {
+    if (dagData) renderDAG();
+});
+
+// ══════════════════════════════════════════════════════════════
+//  DAG Input Panel
+// ══════════════════════════════════════════════════════════════
+let dagInputOpen = false;
+let dagPublisher = null;
+let textInputOpen = false;
+
+function toggleDagInput() {
+    dagInputOpen = !dagInputOpen;
+    document.getElementById('dagInputPanel').classList.toggle('open', dagInputOpen);
+    document.getElementById('dagOverlay').classList.toggle('open', dagInputOpen);
+}
+
+function toggleTextInputPanel() {
+    textInputOpen = !textInputOpen;
+    document.getElementById('textInputPanel').classList.toggle('open', textInputOpen);
+    document.getElementById('textOverlay').classList.toggle('open', textInputOpen);
+}
+
+const DAG_TEMPLATES = {
+    parallel2: {
+        tasks: [
+            { task_id: 'nav_to_box_A', task_type: 'navigate', frame_id: 'map', pose: { x: 0.26, y: 5.0, z: 0.0, qw: 1.0 }, dependencies: [] },
+            { task_id: 'pick_box_A', task_type: 'pick', frame_id: 'aruco_box_30', pose: {}, dependencies: ['nav_to_box_A'] },
+            { task_id: 'nav_to_drop_A', task_type: 'navigate', frame_id: 'map', pose: { x: -1.8, y: 1.8, z: 0.0, qw: 1.0 }, dependencies: ['pick_box_A'] },
+            { task_id: 'place_box_A', task_type: 'place', frame_id: 'map', pose: { x: -1.0, y: 1.0, z: 0.22 }, dependencies: ['nav_to_drop_A'] },
+            { task_id: 'nav_to_box_B', task_type: 'navigate', frame_id: 'map', pose: { x: 1.3, y: 5.65, z: 0.0, qz: 0.7071, qw: 0.7071 }, dependencies: [] },
+            { task_id: 'pick_box_B', task_type: 'pick', frame_id: 'aruco_box_31', pose: {}, dependencies: ['nav_to_box_B'] },
+            { task_id: 'nav_to_drop_B', task_type: 'navigate', frame_id: 'map', pose: { x: 1.8, y: 1.8, z: 0.0, qw: 1.0 }, dependencies: ['pick_box_B'] },
+            { task_id: 'place_box_B', task_type: 'place', frame_id: 'map', pose: { x: 1.0, y: 1.0, z: 0.22 }, dependencies: ['nav_to_drop_B'] },
+        ]
+    },
+    sequential: {
+        tasks: [
+            { task_id: 'nav_to_object', task_type: 'navigate', frame_id: 'map', pose: { x: 1.0, y: 3.0, z: 0.0, qw: 1.0 }, dependencies: [] },
+            { task_id: 'pick_object', task_type: 'pick', frame_id: 'aruco_box_30', pose: {}, dependencies: ['nav_to_object'] },
+            { task_id: 'nav_to_drop', task_type: 'navigate', frame_id: 'map', pose: { x: 0.0, y: 1.0, z: 0.0, qw: 1.0 }, dependencies: ['pick_object'] },
+            { task_id: 'place_object', task_type: 'place', frame_id: 'map', pose: { x: 0.0, y: 1.0, z: 0.3 }, dependencies: ['nav_to_drop'] },
+        ]
+    },
+    empty: {
+        tasks: [
+            { task_id: 'task_1', task_type: 'navigate', frame_id: 'map', pose: { x: 0.0, y: 0.0, z: 0.0, qw: 1.0 }, dependencies: [] }
+        ]
+    }
+};
+
+function loadTemplate(name) {
+    const editor = document.getElementById('dagEditor');
+    editor.value = JSON.stringify(DAG_TEMPLATES[name], null, 2);
+    editor.classList.remove('error');
+    document.getElementById('dagError').textContent = '';
+}
+
+function clearDagEditor() {
+    document.getElementById('dagEditor').value = '';
+    document.getElementById('dagEditor').classList.remove('error');
+    document.getElementById('dagError').textContent = '';
+}
+
+function validateDagJson(text) {
+    if (!text.trim()) return { valid: false, error: 'JSON is empty' };
+
+    let data;
+    try {
+        data = JSON.parse(text);
+    } catch(e) {
+        return { valid: false, error: 'Invalid JSON: ' + e.message };
+    }
+
+    if (!data.tasks || !Array.isArray(data.tasks) || data.tasks.length === 0) {
+        return { valid: false, error: 'DAG must have a non-empty "tasks" array' };
+    }
+
+    const ids = new Set();
+    for (const t of data.tasks) {
+        if (!t.task_id) return { valid: false, error: 'Each task must have a "task_id"' };
+        if (!t.task_type) return { valid: false, error: `Task "${t.task_id}" missing "task_type"` };
+        if (ids.has(t.task_id)) return { valid: false, error: `Duplicate task_id: "${t.task_id}"` };
+        ids.add(t.task_id);
+    }
+
+    for (const t of data.tasks) {
+        for (const dep of (t.dependencies || [])) {
+            if (!ids.has(dep)) {
+                return { valid: false, error: `Task "${t.task_id}" depends on unknown "${dep}"` };
+            }
+        }
+    }
+
+    return { valid: true, data: data };
+}
+
+function previewDag() {
+    const editor = document.getElementById('dagEditor');
+    const errorEl = document.getElementById('dagError');
+    const result = validateDagJson(editor.value);
+
+    if (!result.valid) {
+        editor.classList.add('error');
+        errorEl.textContent = result.error;
+        return;
+    }
+
+    editor.classList.remove('error');
+    errorEl.textContent = '';
+
+    // Render preview: set all tasks to PENDING with no agent
+    const previewData = {
+        tasks: result.data.tasks.map(t => ({
+            ...t,
+            status: 'PENDING',
+            assigned_agent: null,
+        }))
+    };
+    dagData = previewData;
+    renderDAG();
+    updateSummary();
+    document.getElementById('dagEmpty').style.display = 'none';
+    addLogEntry(`Preview: ${result.data.tasks.length} tasks rendered`, 'dispatch');
+}
+
+function submitDag() {
+    const editor = document.getElementById('dagEditor');
+    const errorEl = document.getElementById('dagError');
+    const result = validateDagJson(editor.value);
+
+    if (!result.valid) {
+        editor.classList.add('error');
+        errorEl.textContent = result.error;
+        return;
+    }
+
+    if (!ros || !ros.isConnected) {
+        errorEl.textContent = 'Not connected to rosbridge';
+        return;
+    }
+
+    editor.classList.remove('error');
+    errorEl.textContent = '';
+
+    // Create publisher if needed
+    if (!dagPublisher) {
+        dagPublisher = new ROSLIB.Topic({
+            ros: ros,
+            name: '/chars/task_dag',
+            messageType: 'std_msgs/String',
+        });
+    }
+
+    const msg = new ROSLIB.Message({
+        data: JSON.stringify(result.data)
+    });
+    dagPublisher.publish(msg);
+
+    addLogEntry(`Submitted DAG with ${result.data.tasks.length} tasks`, 'complete');
+    toggleDagInput();
+}
+
+function clearTextInputEditor() {
+    document.getElementById('taskTextEditor').value = '';
+    document.getElementById('taskTextEditor').classList.remove('error');
+    document.getElementById('textInputError').textContent = '';
+}
+
+function submitTextInput() {
+    const editor = document.getElementById('taskTextEditor');
+    const errorEl = document.getElementById('textInputError');
+    const text = editor.value.trim();
+
+    if (!text) {
+        editor.classList.add('error');
+        errorEl.textContent = 'Text input is empty';
+        return;
+    }
+
+    if (!ros || !ros.isConnected) {
+        errorEl.textContent = 'Not connected to rosbridge';
+        return;
+    }
+
+    editor.classList.remove('error');
+    errorEl.textContent = '';
+
+    if (!generateTaskDagService) {
+        generateTaskDagService = new ROSLIB.Service({
+            ros: ros,
+            name: '/generate_task_dag',
+            serviceType: 'plansys2_vlm_planner/srv/GenerateTaskDag',
+        });
+    }
+
+    const request = new ROSLIB.ServiceRequest({
+        text: text,
+    });
+
+    addLogEntry('Calling /generate_task_dag service...', 'dispatch');
+    generateTaskDagService.callService(request, (response) => {
+        addLogEntry('Text input submitted to /generate_task_dag', 'complete');
+        if (response && Object.keys(response).length > 0) {
+            addLogEntry('Service response: ' + JSON.stringify(response), 'complete');
+        }
+        toggleTextInputPanel();
+    }, (error) => {
+        const errMsg = error?.toString ? error.toString() : 'Service call failed';
+        errorEl.textContent = errMsg;
+        addLogEntry('Service call failed: ' + errMsg, 'failure');
+    });
+}
+
+// Keyboard shortcut: Ctrl+Enter to submit
+document.getElementById('dagEditor').addEventListener('keydown', (e) => {
+    if (e.ctrlKey && e.key === 'Enter') {
+        e.preventDefault();
+        submitDag();
+    }
+});
+
+document.getElementById('taskTextEditor').addEventListener('keydown', (e) => {
+    if (e.ctrlKey && e.key === 'Enter') {
+        e.preventDefault();
+        submitTextInput();
+    }
+});
+
+// ══════════════════════════════════════════════════════════════
+//  Init
+// ══════════════════════════════════════════════════════════════
+addLogEntry('Dashboard initialized', '');
+connectROS();
+</script>
+
+</body>
+</html>
